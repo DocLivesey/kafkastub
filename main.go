@@ -3,36 +3,28 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"kafkastub/w2redis"
 	"net/http"
-	"strconv"
 	"time"
 
-	kafka "github.com/segmentio/kafka-go"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	topic    = "stub"
+	topic    = "stub2"
 	broker   = "localhost:9092"
 	logLevel = logrus.InfoLevel
 )
 
 var log = logrus.New()
 
-type KafkaInMsg struct {
+type KafkaMsg struct {
 	Id   int    `json:"id"`
 	Body string `json:"body"`
 	Done bool   `json:"done,omitempty"`
 }
 
-func Send(w http.ResponseWriter, r *http.Request) {
-	kw := &kafka.Writer{
-		Addr:  kafka.TCP(broker),
-		Topic: topic,
-	}
-
-	var msg KafkaInMsg
+func (p *MsgProducer) Send(w http.ResponseWriter, r *http.Request) {
+	var msg KafkaMsg
 
 	err := json.NewDecoder(r.Body).Decode(&msg)
 
@@ -43,23 +35,29 @@ func Send(w http.ResponseWriter, r *http.Request) {
 
 	msg.Body += "bbb"
 
-	err = kw.WriteMessages(context.Background(),
-		kafka.Message{
-			Key:   []byte(strconv.Itoa(msg.Id)),
-			Value: []byte(msg.Body),
-		},
-	)
+	err = p.ProduceMsg(msg)
 
 	if err != nil {
 		w.WriteHeader(500)
 		log.Error(err)
 	}
-
 }
 
 func main() {
 
 	log.SetLevel(logLevel)
+
+	msg := KafkaMsg{
+		Id:   15,
+		Body: "aaaa",
+	}
+
+	producer, err := NewProducer(broker)
+	if err != nil {
+		log.Fatalf("failed to init kafka producer -- %s ", err)
+	}
+
+	p := NewMsgProducer(producer, topic)
 
 	s := &http.Server{
 		Addr:         ":5005",
@@ -67,48 +65,32 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	http.HandleFunc("/in", logger(Send))
-	// http.HandleFunc("/out", logger(Out))
+	http.HandleFunc("/in", logger(p.Send))
 
-	// log.Fatal(http.ListenAndServe(":5001", nil))
+	p.ProduceMsg(msg)
 
 	ctx := context.Background()
 
-	kr := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{broker},
-		Topic:    topic,
-		GroupID:  "stub",
-		MaxBytes: 1e6,
-		MaxWait:  10 * time.Second,
-	})
-
-	defer kr.Close()
-	rdb := w2redis.RedisClient()
+	rdb := RedisClient()
 	defer rdb.Close()
 
+	consumer, err := NewConsumer(broker)
+	if err != nil {
+		log.Fatalf("failed to init kafka consumer -- %s", err)
+	}
+
+	c := NewMsgConsumer(consumer, topic)
+
 	go func() {
-		for {
-			now := time.Now()
-			msg, err := kr.ReadMessage(ctx)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			logKafkaRedis("read from kafka", msg, time.Since(now))
-			now = time.Now()
-
-			err = w2redis.WriteMessage(ctx, msg, rdb)
-			if err != nil {
-				log.Fatal(err)
-			}
-			logKafkaRedis("write to redis", msg, time.Since(now))
-
-		}
-
+		c.ConsumeAndWrite(rdb, ctx)
 	}()
 
-	log.Fatal(s.ListenAndServe())
+	defer c.consumer.Close()
+
+	err = s.ListenAndServe()
+	if err != nil {
+		log.Fatalf("failed to init server %s", err.Error())
+	}
 }
 
 func logger(handler http.HandlerFunc) http.HandlerFunc {
@@ -127,11 +109,11 @@ func logger(handler http.HandlerFunc) http.HandlerFunc {
 
 }
 
-func logKafkaRedis(event string, msg kafka.Message, duration time.Duration) {
+// func logKafkaRedis(event string, msg kafka.Message, duration time.Duration) {
 
-	log.WithFields(logrus.Fields{
-		"event":    event,
-		"message":  string(msg.Key) + " " + string(msg.Value),
-		"duration": duration,
-	}).Info()
-}
+// 	log.WithFields(logrus.Fields{
+// 		"event":    event,
+// 		"message":  string(msg.Key) + " " + string(msg.Value),
+// 		"duration": duration,
+// 	}).Info()
+// }

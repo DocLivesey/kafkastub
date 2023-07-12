@@ -1,10 +1,10 @@
-package w2redis
+package main
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/segmentio/kafka-go"
 )
 
 func RedisClient() *redis.Client {
@@ -15,9 +15,9 @@ func RedisClient() *redis.Client {
 	})
 }
 
-func WriteMessage(ctx context.Context, msg kafka.Message, rdb *redis.Client) error {
+func WriteMessage(ctx context.Context, msg KafkaMsg, rdb *redis.Client) error {
 
-	err := rdb.Set(ctx, string(msg.Key), string(msg.Value), 0).Err()
+	err := rdb.Set(ctx, strconv.Itoa(msg.Id), string(msg.Body), 0).Err()
 	if err != nil {
 		return err
 	}
